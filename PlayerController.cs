@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
 
 public class PlayerController : MonoBehaviour, IActable
 {
@@ -26,32 +27,11 @@ public class PlayerController : MonoBehaviour, IActable
         enemyManager = manager;
     }
 
-    private IEnumerator Attack()
+    private void Start()
     {
-        if (Time.time - lastAttackTime >= 1f / attackSpeed)
-        {
-            EnemyController nearestEnemy = FindNearestEnemy();
-            if (nearestEnemy != null && Vector2.Distance(transform.position, nearestEnemy.transform.position) <= 1.5f)
-            {
-                int damage = CalculateDamage();
-                GameManager.Instance.ShowDamageNumber(nearestEnemy.transform.position, damage);
-                lastAttackTime = Time.time;
-
-                Vector2 attackDirection = (nearestEnemy.transform.position - transform.position).normalized;
-                yield return StartCoroutine(ShakeAnimation(attackDirection));
-            }
-        }
-        yield return null;
+        currentHealth = maxHealth;
+        StartCoroutine(AutoAttackCoroutine());
     }
-
-    private int CalculateDamage()
-    {
-        // Simple damage calculation, can be expanded later
-        return Random.Range(attackPower - 2, attackPower + 3);
-    }
-
-    public delegate void HealthChangedDelegate(int currentHealth, int maxHealth);
-    public event HealthChangedDelegate OnHealthChanged;
 
     private IEnumerator AutoAttackCoroutine()
     {
@@ -69,6 +49,17 @@ public class PlayerController : MonoBehaviour, IActable
         }
     }
 
+    private EnemyController FindNearestEnemy()
+    {
+        if (GameManager.Instance == null || GameManager.Instance.enemyManager == null)
+        {
+            Debug.LogError("GameManager or EnemyManager is null in PlayerController");
+            return null;
+        }
+
+        return GameManager.Instance.enemyManager.GetNearestEnemy(transform.position);
+    }
+
     private void Attack(EnemyController enemy)
     {
         int damage = CalculateDamage();
@@ -76,25 +67,111 @@ public class PlayerController : MonoBehaviour, IActable
 
         Vector2 attackDirection = (enemy.transform.position - transform.position).normalized;
         StartCoroutine(ShakeAnimation(attackDirection));
+        enemy.TakeDamage(damage);
+        GameManager.Instance.ShowDamageNumber(enemy.transform.position, damage);
     }
 
-    private void AlignToGrid()
+    private IEnumerator ShakeAnimation(Vector2 direction)
     {
-        Vector3 alignedPosition = new Vector3(
-            Mathf.RoundToInt(transform.position.x),
-            Mathf.RoundToInt(transform.position.y),
-            transform.position.z + 1
-        );
-        transform.position = alignedPosition;
-        targetPosition = alignedPosition;
+        Vector3 originalPosition = transform.position;
+        float shakeDuration = .25f / attackSpeed; // Duration based on attack speed
+        float elapsedTime = 0f;
+
+        while (elapsedTime < shakeDuration)
+        {
+            float strength = (1 - (elapsedTime / shakeDuration)) * 0.1f;
+            transform.position = originalPosition + (Vector3)(direction * strength * Mathf.Sin(elapsedTime * 30));
+            elapsedTime += Time.deltaTime;
+            yield return null;
+        }
+
+        transform.position = originalPosition;
     }
 
-    public IEnumerator TakeTurn()
+    public void TakeDamage(int damage)
     {
+        currentHealth -= damage;
+        if (currentHealth <= 0)
+        {
+            Die();
+        }
+    }
+
+    private void Die()
+    {
+        GameManager.Instance.ChangeGameState(GameManager.GameState.GameOver);
+    }
+
+    private int CalculateDamage()
+    {
+        return attackPower;
+    }
+
+    private bool IsEnemyAtPosition(Vector2 position)
+    {
+        EnemyController[] enemies = FindObjectsOfType<EnemyController>();
+        foreach (EnemyController enemy in enemies)
+        {
+            if (Vector2.Distance(position, enemy.transform.position) < 0.5f)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool IsAlive()
+    {
+        return currentHealth > 0;
+    }
+
+    public void ResetPosition()
+    {
+        // Implement reset position logic here
+    }
+
+    private void UpdateVisibility()
+    {
+        if (GameManager.Instance != null && GameManager.Instance.DungeonGenerator != null)
+        {
+            GameManager.Instance.DungeonGenerator.UpdateVisibility(transform.position, visibilityRadius);
+        }
+    }
+
+    private IEnumerator MoveToTargetPosition()
+    {
+        Vector3 startPosition = transform.position;
+        float journeyLength = Vector3.Distance(startPosition, targetPosition);
+        float moveDuration = journeyLength / moveSpeed;
+        float elapsedTime = 0f;
+
+        while (elapsedTime < moveDuration)
+        {
+            float t = elapsedTime / moveDuration;
+            transform.position = Vector3.Lerp(startPosition, targetPosition, t);
+            elapsedTime += Time.deltaTime;
+            yield return null;
+        }
+
+        transform.position = targetPosition;
         isMoving = false;
-        yield return StartCoroutine(WaitForInput());
-        TurnManager.Instance.EndPlayerTurn();
     }
+
+    private bool TryMove(Vector2 direction)
+    {
+        Vector2 newPosition = (Vector2)transform.position + direction;
+        int newX = Mathf.RoundToInt(newPosition.x);
+        int newY = Mathf.RoundToInt(newPosition.y);
+
+        if (GameManager.Instance.DungeonGenerator.IsWalkableTile(newX, newY))
+        {
+            targetPosition = new Vector2(newX, newY);
+            isMoving = true;
+            return true;
+        }
+        return false;
+    }
+
     private IEnumerator WaitForInput()
     {
         bool actionTaken = false;
@@ -122,114 +199,10 @@ public class PlayerController : MonoBehaviour, IActable
         }
     }
 
-    private bool TryMove(Vector2 direction)
+    public IEnumerator TakeTurn()
     {
-        Vector2 newPosition = (Vector2)transform.position + direction;
-        int newX = Mathf.RoundToInt(newPosition.x);
-        int newY = Mathf.RoundToInt(newPosition.y);
-
-        if (GameManager.Instance.DungeonGenerator.IsWalkableTile(newX, newY))
-        {
-            targetPosition = new Vector2(newX, newY);
-            isMoving = true;
-            return true;
-        }
-        return false;
-    }
-
-    private bool IsEnemyAtPosition(Vector2 position)
-    {
-        EnemyController[] enemies = FindObjectsOfType<EnemyController>();
-        foreach (EnemyController enemy in enemies)
-        {
-            if (Vector2.Distance(position, enemy.transform.position) < 0.5f)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private IEnumerator MoveToTargetPosition()
-    {
-        Vector3 startPosition = transform.position;
-        float journeyLength = Vector3.Distance(startPosition, targetPosition);
-        float moveDuration = journeyLength / moveSpeed;
-        float elapsedTime = 0f;
-
-        while (elapsedTime < moveDuration)
-        {
-            float t = elapsedTime / moveDuration;
-            transform.position = Vector3.Lerp(startPosition, targetPosition, t);
-            elapsedTime += Time.deltaTime;
-            yield return null;
-        }
-
-        transform.position = targetPosition;
         isMoving = false;
-    }
-    private EnemyController FindNearestEnemy()
-    {
-        if (GameManager.Instance == null || GameManager.Instance.enemyManager == null)
-        {
-            Debug.LogError("GameManager or EnemyManager is null in PlayerController");
-            return null;
-        }
-
-        return GameManager.Instance.enemyManager.GetNearestEnemy(transform.position);
-    }
-
-    public void TakeDamage(int damage)
-    {
-        currentHealth -= damage;
-        currentHealth = Mathf.Clamp(currentHealth, 0, maxHealth);
-        OnHealthChanged?.Invoke(currentHealth, maxHealth);
-        Vector3 damagePosition = transform.position + Vector3.up; // Adjust this offset as needed
-
-        if (currentHealth <= 0)
-        {
-            Die();
-        }
-    }
-
-    private void Die()
-    {
-        GameManager.Instance.ChangeGameState(GameManager.GameState.GameOver);
-    }
-
-    public bool IsAlive()
-    {
-        return currentHealth > 0;
-    }
-
-    public void ResetPosition()
-    {
-        Vector2 startPosition = GameManager.Instance.DungeonGenerator.GetPlayerStartPosition();
-        transform.position = new Vector3(Mathf.RoundToInt(startPosition.x), Mathf.RoundToInt(startPosition.y), transform.position.z);
-        targetPosition = transform.position;
-    }
-
-    private void UpdateVisibility()
-    {
-        if (GameManager.Instance != null && GameManager.Instance.DungeonGenerator != null)
-        {
-            GameManager.Instance.DungeonGenerator.UpdateVisibility(transform.position, visibilityRadius);
-        }
-    }
-    private IEnumerator ShakeAnimation(Vector2 direction)
-    {
-        Vector3 originalPosition = transform.position;
-        float shakeDuration = .25f / attackSpeed; // Duration based on attack speed
-        float elapsedTime = 0f;
-
-        while (elapsedTime < shakeDuration)
-        {
-            float strength = (1 - (elapsedTime / shakeDuration)) * 0.1f;
-            transform.position = originalPosition + (Vector3)(direction * strength * Mathf.Sin(elapsedTime * 30));
-            elapsedTime += Time.deltaTime;
-            yield return null;
-        }
-
-        transform.position = originalPosition;
+        yield return StartCoroutine(WaitForInput());
+        TurnManager.Instance.EndPlayerTurn();
     }
 }

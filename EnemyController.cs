@@ -2,75 +2,108 @@ using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
-public class EnemyController : MonoBehaviour
+public class EnemyController : MonoBehaviour, IActable
 {
     public float moveSpeed = 1f;
     private Vector2Int targetPosition;
     private DungeonGenerator dungeonGenerator;
 
+    public Transform player;
+    public float speed = 2f;
+    public float attackRange = 1.5f;
+    public int attackDamage = 10;
+    public int health = 50;
+
+    private float lastAttackTime = 0f;
+    public float attackSpeed = 1f;
+
     private void Start()
     {
-        // Initialize target position to current position
-        targetPosition = Vector2Int.RoundToInt(transform.position);
-        dungeonGenerator = FindObjectOfType<DungeonGenerator>();
+        // Find the player in the scene
+        player = GameObject.FindGameObjectWithTag("Player").transform;
+        if (player == null)
+        {
+            Debug.LogError("Player not found in the scene!");
+        }
 
-        // Start the random movement coroutine
-        StartCoroutine(RandomMovement());
+        // Find the DungeonGenerator in the scene
+        dungeonGenerator = FindObjectOfType<DungeonGenerator>();
+        if (dungeonGenerator == null)
+        {
+            Debug.LogError("DungeonGenerator not found in the scene!");
+        }
+
+        StartCoroutine(AutoAttackCoroutine());
     }
 
-    private IEnumerator RandomMovement()
+    private IEnumerator AutoAttackCoroutine()
     {
         while (true)
         {
-            MoveRandomly();
-            yield return new WaitForSeconds(1f / moveSpeed); // Adjust speed as needed
+            if (Time.time - lastAttackTime >= 1f / attackSpeed)
+            {
+                PlayerController nearestPlayer = FindNearestPlayer();
+                if (nearestPlayer != null && Vector2.Distance(transform.position, nearestPlayer.transform.position) <= attackRange)
+                {
+                    Attack(nearestPlayer);
+                }
+            }
+            yield return null;
         }
     }
 
-    private void MoveRandomly()
+    private PlayerController FindNearestPlayer()
     {
-        Vector2Int currentPos = Vector2Int.RoundToInt(transform.position);
-        List<Vector2Int> validMoves = GetValidMoves(currentPos);
-
-        if (validMoves.Count > 0)
+        PlayerController player = FindObjectOfType<PlayerController>();
+        if (player != null && Vector2.Distance(transform.position, player.transform.position) <= attackRange)
         {
-            int moveIndex = UnityEngine.Random.Range(0, validMoves.Count);
-            Vector2Int nextPos = validMoves[moveIndex];
-            StartCoroutine(MoveToPosition(nextPos));
+            return player;
         }
+        return null;
     }
 
-    private IEnumerator MoveToPosition(Vector2Int newPosition)
+    private void Attack(PlayerController player)
     {
-        Vector3 startPosition = transform.position;
-        Vector3 endPosition = new Vector3(newPosition.x, newPosition.y, transform.position.z);
-        float elapsedTime = 0f;
-        float moveDuration = 1f / moveSpeed; // Adjust move speed as needed
+        int damage = attackDamage;
+        lastAttackTime = Time.time;
 
-        while (elapsedTime < moveDuration)
+        Vector2 attackDirection = (player.transform.position - transform.position).normalized;
+        StartCoroutine(ShakeAnimation(attackDirection));
+        player.TakeDamage(damage);
+    }
+
+    private IEnumerator ShakeAnimation(Vector2 direction)
+    {
+        Vector3 originalPosition = transform.position;
+        float shakeDuration = 0.1f;
+        float shakeMagnitude = 0.1f;
+        float elapsed = 0.0f;
+
+        while (elapsed < shakeDuration)
         {
-            transform.position = Vector3.Lerp(startPosition, endPosition, (elapsedTime / moveDuration));
-            elapsedTime += Time.deltaTime;
+            float offsetX = Random.Range(-1f, 1f) * shakeMagnitude;
+            float offsetY = Random.Range(-1f, 1f) * shakeMagnitude;
+            transform.position = new Vector3(originalPosition.x + offsetX, originalPosition.y + offsetY, originalPosition.z);
+            elapsed += Time.deltaTime;
             yield return null;
         }
 
-        transform.position = endPosition;
+        transform.position = originalPosition;
     }
 
-    private List<Vector2Int> GetValidMoves(Vector2Int position)
+    public void TakeDamage(int damage)
     {
-        List<Vector2Int> validMoves = new List<Vector2Int>();
-        Vector2Int[] directions = { Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right };
-
-        foreach (var dir in directions)
+        health -= damage;
+        if (health <= 0)
         {
-            Vector2Int newPos = position + dir;
-            if (dungeonGenerator.IsWalkableTile(newPos.x, newPos.y))
-            {
-                validMoves.Add(newPos);
-            }
+            Die();
         }
+    }
 
-        return validMoves;
+    private void Die()
+    {
+        // Notify the GameManager to remove this enemy
+        GameManager.Instance.RemoveEnemy(this);
+        Destroy(gameObject);
     }
 }
